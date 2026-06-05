@@ -1,0 +1,6 @@
+{
+  "name": "antd-preview",
+  "dependencies": {
+    "surge": "*"
+  }
+}
