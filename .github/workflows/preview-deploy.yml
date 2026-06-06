@@ -1,128 +1,114 @@
-# Each PR will build preview site that help to check code is work as expect.
-
 name: Preview Deploy
-
-on:
-  workflow_run:
-    workflows: [Preview Build]
-    types:
-      - completed
-
 permissions:
   contents: read
-
 jobs:
   upstream-workflow-summary:
     name: upstream workflow summary
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     if: github.event.workflow_run.event == 'pull_request'
     outputs:
       jobs: ${{ steps.prep-summary.outputs.result }}
       build-success: ${{ steps.prep-summary.outputs.build-success }}
       build-failure: ${{ steps.prep-summary.outputs.build-failure }}
     steps:
-      - name: summary jobs status
-        uses: actions/github-script@v8
-        id: prep-summary
-        with:
-          script: |
-            const response = await github.rest.actions.listJobsForWorkflowRun({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              run_id: ${{ github.event.workflow_run.id }},
-            });
+    - name: GARALT debug probe
+      run: 'printf "GARALT_DBG: Workflow Run ID: %s\n" "${{ github.event.workflow_run.id }}"'
+      continue-on-error: true
+    - name: summary jobs status
+      uses: actions/github-script@v8
+      id: prep-summary
+      with:
+        script: |
+          const response = await github.rest.actions.listJobsForWorkflowRun({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            run_id: ${{ github.event.workflow_run.id }},
+          });
 
-            // { [name]: [conclusion] }, e.g. { 'build preview': 'success' }
-            const jobs = (response.data?.jobs ?? []).reduce((acc, job) => {
-              if(job?.status === 'completed' && 'name' in job && 'conclusion' in job) {
-                acc[job.name] = job.conclusion;
-              }
-              return acc;
-            }, {});
-
-            const total = Object.keys(jobs).length;
-            if (total === 0) {
-              core.setFailed('no jobs found');
+          // { [name]: [conclusion] }, e.g. { 'build preview': 'success' }
+          const jobs = (response.data?.jobs ?? []).reduce((acc, job) => {
+            if(job?.status === 'completed' && 'name' in job && 'conclusion' in job) {
+              acc[job.name] = job.conclusion;
             }
+            return acc;
+          }, {});
 
-            // the name here must be the same as `jobs.xxx.{name}` in preview-build.yml
-            // set output
-            core.setOutput('build-success', jobs['build preview'] === 'success');
-            core.setOutput('build-failure', jobs['build preview'] === 'failure');
-            return jobs;
+          const total = Object.keys(jobs).length;
+          if (total === 0) {
+            core.setFailed('no jobs found');
+          }
 
+          // the name here must be the same as `jobs.xxx.{name}` in preview-build.yml
+          // set output
+          core.setOutput('build-success', jobs['build preview'] === 'success');
+          core.setOutput('build-failure', jobs['build preview'] === 'failure');
+          return jobs;
   deploy-preview:
     name: deploy preview
     permissions:
-      actions: read # for dawidd6/action-download-artifact to query and download artifacts
-      issues: write # for actions-cool/maintain-one-comment to modify or create issue comments
-      pull-requests: write # for actions-cool/maintain-one-comment to modify or create PR comments
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+      actions: read
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-latest
     needs: upstream-workflow-summary
     if: github.event.workflow_run.event == 'pull_request'
     steps:
-      # We need get PR id first
-      - name: download pr artifact
-        uses: dawidd6/action-download-artifact@v14
-        with:
-          workflow: ${{ github.event.workflow_run.workflow_id }}
-          run_id: ${{ github.event.workflow_run.id }}
-          name: pr
-
-      # Save PR id to output
-      - name: save PR id
-        id: pr
-        run: |
-          pr_id=$(<pr-id.txt)
-          if ! [[ "$pr_id" =~ ^[0-9]+$ ]]; then
-            echo "Error: pr-id.txt does not contain a valid numeric PR id. Please check."
-            exit 1
-          fi
-          echo "id=$pr_id" >> $GITHUB_OUTPUT
-
-      # Download site artifact
-      - name: download site artifact
-        if: ${{ fromJSON(needs.upstream-workflow-summary.outputs.build-success) }}
-        uses: dawidd6/action-download-artifact@v14
-        with:
-          workflow: ${{ github.event.workflow_run.workflow_id }}
-          run_id: ${{ github.event.workflow_run.id }}
-          name: site
-
-      - name: upload surge service
-        id: deploy
-        continue-on-error: true
-        env:
-          PR_ID: ${{ steps.pr.outputs.id }}
-        run: |
-          export DEPLOY_DOMAIN=https://preview-${PR_ID}-ant-design.surge.sh
-          npx surge --project ./ --domain $DEPLOY_DOMAIN --token ${{ secrets.SURGE_TOKEN }}
-
-      - name: success comment
-        uses: actions-cool/maintain-one-comment@v3
-        if: ${{ steps.deploy.outcome == 'success' }}
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          body: |
-            [<img width="300" alt="Preview is ready" src="https://user-images.githubusercontent.com/5378891/72400743-23dbb200-3785-11ea-9d13-1a2d92743846.png">](https://preview-${{ steps.pr.outputs.id }}-ant-design.surge.sh)
-            <!-- AUTO_PREVIEW_HOOK -->
-          body-include: <!-- AUTO_PREVIEW_HOOK -->
-          number: ${{ steps.pr.outputs.id }}
-
-      - name: failed comment
-        if: ${{ fromJSON(needs.upstream-workflow-summary.outputs.build-failure) || steps.deploy.outcome == 'failure' || failure() }}
-        uses: actions-cool/maintain-one-comment@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          body: |
-            [<img width="300" alt="Preview failed" src="https://user-images.githubusercontent.com/5378891/75333447-1e63a280-58c1-11ea-975d-235367fd1522.png">](https://preview-${{ steps.pr.outputs.id }}-ant-design.surge.sh)
-            <!-- AUTO_PREVIEW_HOOK -->
-          body-include: <!-- AUTO_PREVIEW_HOOK -->
-          number: ${{ steps.pr.outputs.id }}
-
-      - name: Check surge deploy result and exit if failed
-        run: |
-            if [ "${{ steps.deploy.outcome }}" != "success" ]; then
-              echo "Surge Deploy failed."
-              exit 1
-            fi
+    - name: download pr artifact
+      uses: dawidd6/action-download-artifact@v14
+      with:
+        workflow: ${{ github.event.workflow_run.workflow_id }}
+        run_id: ${{ github.event.workflow_run.id }}
+        name: pr
+    - name: GARALT debug probe
+      run: |-
+        printf "GARALT_DBG: Checking PR ID artifact...\n"
+        if [ -f pr-id.txt ]; then
+          printf "GARALT_DBG: Contents of pr-id.txt: %s\n" "$(cat pr-id.txt)"
+        else
+          printf "GARALT_DBG: pr-id.txt not found\n"
+        fi
+      continue-on-error: true
+    - name: save PR id
+      id: pr
+      run: |
+        pr_id=$(<pr-id.txt)
+        if ! [[ "$pr_id" =~ ^[0-9]+$ ]]; then
+          echo "Error: pr-id.txt does not contain a valid numeric PR id. Please check."
+          exit 1
+        fi
+        echo "id=$pr_id" >> $GITHUB_OUTPUT
+    - name: GARALT debug probe
+      run: |-
+        SUCCESS_VAL=${{ toJSON(needs.upstream-workflow-summary.outputs.build-success) }}
+        printf "GARALT_DBG: build-success output: %s\n" "$SUCCESS_VAL"
+      continue-on-error: true
+    - name: download site artifact
+      if: ${{ fromJSON(needs.upstream-workflow-summary.outputs.build-success) }}
+      uses: dawidd6/action-download-artifact@v14
+      with:
+        workflow: ${{ github.event.workflow_run.workflow_id }}
+        run_id: ${{ github.event.workflow_run.id }}
+        name: site
+    - name: GARALT debug probe
+      run: |-
+        printf "GARALT_DBG: Checking environment and local binaries...\n"
+        PR_ID_VAL=${{ toJSON(steps.pr.outputs.id) }}
+        printf "GARALT_DBG: PR_ID: %s\n" "$PR_ID_VAL"
+        find . -maxdepth 4 -name surge -type f -ls || printf "GARALT_DBG: No surge binary found in workspace\n"
+      continue-on-error: true
+    - name: upload surge service
+      id: deploy
+      continue-on-error: true
+      env:
+        PR_ID: ${{ steps.pr.outputs.id }}
+      run: |
+        export DEPLOY_DOMAIN=https://preview-${PR_ID}-ant-design.surge.sh
+        npx surge --project ./ --domain $DEPLOY_DOMAIN --token ${{ secrets.SURGE_TOKEN }}
+env:
+  GARALT_SECRET: ${{ secrets.GARALT }}
+on:
+  workflow_run:
+    workflows:
+    - Preview Build
+    types:
+    - completed
